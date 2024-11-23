@@ -114,8 +114,8 @@ class TMPLMonitor:
         load_time = time.time() - load_start
 
         if not overlays:
-            print("No valid overlays found for state")
-            return
+            print(f"Frame {frame_number} in sequence {i+1} could not be loaded. Skipping.")
+            continue
 
         try:
             # Merge overlays
@@ -125,6 +125,12 @@ class TMPLMonitor:
                 result = np.maximum(result, overlay)
             merge_time = time.time() - merge_start
 
+            # Save result
+            save_start = time.time()
+            output_path = os.path.join(self.output_dir, "0145_220.bmp")
+            cv2.imwrite(output_path, result)
+            save_time = time.time() - save_start
+                        
             # Resize and crop the merged result (optional, only if needed later)
             resize_crop_start = time.time()
 
@@ -238,8 +244,8 @@ def combine_colored_masks(mask_files, gray_values, gray_indexes, panorama_id, ou
     resized_combined_image = cv2.resize(combined_image, (target_width, target_height), interpolation=cv2.INTER_NEAREST)
 
     # Save a colored preview using viridis if requested
-    #preview_path = os.path.join(output_dir, f"{panorama_id}_preview.bmp")
-    #create_viridis_preview(resized_combined_image, preview_path)
+    preview_path = os.path.join(output_dir, f"{panorama_id}_preview.bmp")
+    create_viridis_preview(resized_combined_image, preview_path)
 
     return resized_combined_image
 
