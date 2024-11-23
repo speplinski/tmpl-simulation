@@ -25,6 +25,8 @@ class TMPLMonitor:
         self.directories = [os.path.join(self.base_dir, f"{i:02}_{panorama_id}_220") for i in range(1, 6)]
         self.output_dir = f'./landscapes/{panorama_id}'
         self.preview_path = os.path.join(self.output_dir, f"{panorama_id}_preview.bmp")
+        self.mask_result_index = 0
+        self.mask_result_dir = './results'
 
         # Initialize caches
         self.image_cache = {}
@@ -225,8 +227,9 @@ class TMPLMonitor:
             cropped_result = resized_image[crop_top:crop_top + 1280, :3840]
             
             # Combined mask
+            self.mask_result_index += 1
             combined_image = self.combine_colored_masks()
-            combined_output_path = os.path.join(self.output_dir, f"{self.panorama_id}_mask.bmp")
+            combined_output_path = os.path.join(self.mask_result_dir, f"{self.mask_result_index}.bmp")
             save_tasks.append((combined_output_path, combined_image))
             
             # Execute all saves in parallel
