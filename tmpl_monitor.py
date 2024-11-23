@@ -6,6 +6,7 @@ from ast import literal_eval
 import sys
 import cv2
 import numpy as np
+import matplotlib.pyplot as plt
 from concurrent.futures import ThreadPoolExecutor
 
 class TMPLMonitor:
@@ -14,6 +15,7 @@ class TMPLMonitor:
         self.filename = 'tmpl.log'
         self.last_modified = 0
         self.last_state = None
+        self.use_preview = False
 
         # Image processing settings
         self.panorama_id = panorama_id
@@ -22,6 +24,7 @@ class TMPLMonitor:
         self.base_dir = f'./landscapes/{panorama_id}/sequences'
         self.directories = [os.path.join(self.base_dir, f"{i:02}_{panorama_id}_220") for i in range(1, 6)]
         self.output_dir = f'./landscapes/{panorama_id}'
+        self.preview_path = os.path.join(self.output_dir, f"{panorama_id}_preview.bmp")
 
         # Initialize caches
         self.image_cache = {}
@@ -130,7 +133,32 @@ class TMPLMonitor:
                 binary_mask = (mask > 0)
                 combined_image[binary_mask] = color_index
 
+        # Create preview
+        if self.use_preview:
+            self.create_viridis_preview(combined_image, self.preview_path)
+
         return combined_image
+
+    def create_viridis_preview(self, mask, output_path):
+        """
+        Create a colored preview using the viridis colormap and save it as BMP.
+
+        Args:
+            mask (np.ndarray): Grayscale mask with indexed values.
+            output_path (str): Path to save the preview image.
+
+        Returns:
+            None
+        """
+
+        normalized_mask = (mask - mask.min()) / (mask.max() - mask.min())
+        viridis_colored = plt.cm.viridis(normalized_mask)
+        viridis_image = (viridis_colored[:, :, :3] * 255).astype(np.uint8)
+        viridis_bgr = cv2.cvtColor(viridis_image, cv2.COLOR_RGB2BGR)
+
+        # Save the image using OpenCV in BMP format
+        cv2.imwrite(output_path, viridis_bgr)
+        print("Preview saved")
 
     def process_state(self, state):
         """Process images based on current state"""
