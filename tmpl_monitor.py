@@ -54,6 +54,35 @@ class TMPLMonitor:
         self.cached_masks = self.preload_masks()
         print("Masks loaded")
 
+        # Find the highest existing index
+        self.mask_result_index = self.find_highest_result_index()
+        print(f"Starting from index: {self.mask_result_index}")
+
+    def find_highest_result_index(self):
+        """Find the highest existing result index in the results directory"""
+        try:
+            if not os.path.exists(self.mask_result_dir):
+                os.makedirs(self.mask_result_dir)
+                return 0
+
+            existing_files = [f for f in os.listdir(self.mask_result_dir) if f.endswith('.bmp')]
+            if not existing_files:
+                return 0
+
+            indices = []
+            for filename in existing_files:
+                try:
+                    # Remove '.bmp' and parse the remaining string as an integer
+                    index = int(filename.rsplit('.', 1)[0])
+                    indices.append(index)
+                except ValueError:
+                    continue
+
+            return max(indices) if indices else 0
+        except Exception as e:
+            print(f"Error finding highest index: {e}")
+            return 0
+
     def preload_masks(self, target_size=(3840, 1280)):
         """Pre-load and resize all masks"""
         masks = {}
