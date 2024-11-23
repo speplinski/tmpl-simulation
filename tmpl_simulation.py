@@ -13,7 +13,7 @@ class TMPLSimulation:
         # Simulation parameters
         self.rows = 3
         self.cols = 10
-        self.N = 40  # Maximum saturation value
+        self.N = 240  # Maximum saturation value
         
         # Initialize grids
         self.landscape = [
