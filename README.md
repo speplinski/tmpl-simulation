@@ -81,7 +81,7 @@ The data will be placed under the `landscapes/` directory in the correct structu
 In the first terminal window, start the simulation to interact with the grid-based landscape:
 
 ```bash
-python3 tmpl-simulation.py
+python3 tmpl_simulation.py
 ```
 
 The simulation provides the following functionalities:
@@ -100,7 +100,7 @@ Below is an example screenshot of the simulation interface in the terminal:
 In the second terminal window, start the monitor to process the simulation data:
 
 ```bash
-python3 tmpl-monitor.py
+python3 tmpl_monitor.py
 ```
 
 The monitor provides the following functionalities:
