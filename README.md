@@ -56,7 +56,68 @@ Based on the performance analysis, the following key findings were observed:
 
 These findings highlight the importance of choosing an appropriate image format (BMP) for optimizing the performance of the real-time image generation system.
 
-## Conclusion
-The real-time image generation system demonstrates an efficient architecture for processing landscape images based on viewer positions. By leveraging performance optimizations such as caching, parallel processing, and vectorized operations, the system achieves fast and responsive image generation. The choice of the BMP format further enhances the system's performance, making it suitable for real-time applications.
 
-The combination of the TMPL Simulation and TMPL Monitor components enables seamless integration of viewer interactions with real-time image processing, providing an immersive and dynamic landscape experience.
+## Installation
+Clone the repository and install dependencies:
+
+```bash
+git clone https://github.com/speplinski/tmpl-simulation.git
+cd tmpl-simulation/
+pip3 install -r requirements.txt
+```
+
+## Data Preparation
+Run the provided script to download and organize required data:
+
+```bash
+./download_data.sh
+```
+
+The data will be placed under the `landscapes/` directory in the correct structure.
+
+## Usage
+
+### Start the Simulation
+In the first terminal window, start the simulation to interact with the grid-based landscape:
+
+```bash
+python3 tmpl-simulation.py
+```
+
+The simulation provides the following functionalities:
+- **Grid-Based Representation**: Displays a grid in the terminal where each cell represents a part of the landscape.
+- **Visitor Interaction**: Visitors can be added, removed, or moved using keyboard controls. Their presence affects the grid cells, such as increasing saturation levels.
+- **Logging**: All actions and grid state changes are logged to tmpl.log, which is read by the monitor component.
+- **Real-Time Updates**: The simulation dynamically updates and visualizes visitor positions and saturation levels.
+- **Interactive Controls**:
+  - **Arrow Keys**: Navigate the grid to simulate visitor movements.
+  - **Add/Remove Visitors**: Dynamically adjust the number of visitors.
+
+Below is an example screenshot of the simulation interface in the terminal:
+![simulation Console](assets/simulation.png)
+
+### Start the Monitor
+In the second terminal window, start the monitor to process the simulation data:
+
+```bash
+python3 tmpl-monitor.py
+```
+
+The monitor provides the following functionalities:
+- **Log Monitoring**: Continuously reads the `tmpl.log` file for updates and extracts state information.
+- **Image Loading and Caching**: Loads relevant image sequences from disk, caching them in memory to minimize disk I/O.
+- **Image Merging**: Combines image frames into a composite output based on visitor interactions logged by the simulation.
+- **Color Mapping**: Applies predefined color mappings to create visual masks of the updated grid states.
+- **Image Saving**: Saves the generated images and masks to disk using parallel processing for efficiency.
+- **Performance Logging**: Logs metrics such as image loading time, processing time, and saving time for analysis and optimization.
+- **AI Integration**: The generated segmentation masks are processed in real time by dedicated AI models using the [TMPL Benchmark App](https://github.com/speplinski/tmpl-benchmark-app). These models analyze the masks based on viewer interactions and generate visual outputs.
+- **Visualization**: The [TMPL Visualizer](https://github.com/speplinski/tmpl-visualizer) displays the AI-generated visuals based on segmentation masks, creating dynamic, interactive experiences for viewers.
+
+Below is an example screenshot of the monitor interface in the terminal:
+![Monitor Console](assets/monitor.png)
+
+## Contribution
+Feel free to submit issues or pull requests to improve the system. Contributions are welcome!
+
+## License
+This project is licensed under the [Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License](LICENSE.md). See the `LICENSE.md` file for full details.
