@@ -24,6 +24,9 @@ class TMPLMonitor:
         self.base_dir = f'./landscapes/{panorama_id}/sequences'
         self.directories = [os.path.join(self.base_dir, f"{i:02}_{panorama_id}_220") for i in range(1, 6)]
         self.output_dir = f'./landscapes/{panorama_id}'
+        
+        self.image_cache = {}
+        self.cache_ttl = 60*5  # Time-to-live for image cache in seconds
 
         # Verify directories
         print("\nChecking directories:")
@@ -78,11 +81,17 @@ class TMPLMonitor:
             return None
 
     def get_image(self, dir_index, frame_number):
-        """Load image on demand"""
+        """Load image on demand with caching"""
         try:
+            cache_key = f"{dir_index}_{frame_number}"
+            if cache_key in self.image_cache and time.time() - self.image_cache[cache_key][1] < self.cache_ttl:
+                return self.image_cache[cache_key][0]
+
             filepath = self.path_cache[dir_index].get(frame_number)
             if filepath and os.path.exists(filepath):
-                return cv2.imread(filepath, cv2.IMREAD_GRAYSCALE)
+                image = cv2.imread(filepath, cv2.IMREAD_GRAYSCALE)
+                self.image_cache[cache_key] = (image, time.time())
+                return image
             else:
                 if filepath:
                     print(f"File not found: {filepath}")
@@ -115,7 +124,6 @@ class TMPLMonitor:
 
         if not overlays:
             print(f"Frame {frame_number} in sequence {i+1} could not be loaded. Skipping.")
-            continue
 
         try:
             # Merge overlays
