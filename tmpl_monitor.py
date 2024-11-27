@@ -24,14 +24,13 @@ class TMPLMonitor:
         self.base_dir = f'./landscapes/{panorama_id}/sequences'
         self.directories = [os.path.join(self.base_dir, f"{i:02}_{panorama_id}_220") for i in range(1, 6)]
         self.output_dir = f'./landscapes/{panorama_id}'
-        self.preview_path = os.path.join(self.output_dir, f"{panorama_id}_preview.bmp")
-        self.mask_result_index = 0
-        self.mask_result_dir = './results'
+        self.results_dir = './results'
+        self.preview_results_dir = './preview_results'
+        self.results_index = 0
 
         # Initialize caches
         self.image_cache = {}
         self.cache_ttl = 300
-
         self.executor = ThreadPoolExecutor(max_workers=5)
 
         # Verify directories
@@ -39,10 +38,8 @@ class TMPLMonitor:
         for dir in self.directories:
             print(f"{dir}: {'exists' if os.path.exists(dir) else 'MISSING'}")
 
-        mask_dir = self.output_dir
-        print("\nFiles in output directory:")
-        for filename in os.listdir(mask_dir):
-            print(filename)
+        os.makedirs(self.results_dir, exist_ok=True)
+        os.makedirs(self.preview_results_dir, exist_ok=True)
 
         # Initialize path cache
         print("\nInitializing BMP path cache...")
@@ -54,34 +51,7 @@ class TMPLMonitor:
         self.cached_masks = self.preload_masks()
         print("Masks loaded")
 
-        # Find the highest existing index
-        self.mask_result_index = self.find_highest_result_index()
-        print(f"Starting from index: {self.mask_result_index}")
-
-    def find_highest_result_index(self):
-        """Find the highest existing result index in the results directory"""
-        try:
-            if not os.path.exists(self.mask_result_dir):
-                os.makedirs(self.mask_result_dir)
-                return 0
-
-            existing_files = [f for f in os.listdir(self.mask_result_dir) if f.endswith('.bmp')]
-            if not existing_files:
-                return 0
-
-            indices = []
-            for filename in existing_files:
-                try:
-                    # Remove '.bmp' and parse the remaining string as an integer
-                    index = int(filename.rsplit('.', 1)[0])
-                    indices.append(index)
-                except ValueError:
-                    continue
-
-            return max(indices) if indices else 0
-        except Exception as e:
-            print(f"Error finding highest index: {e}")
-            return 0
+        print(f"Starting from index: {self.results_index}")
 
     def preload_masks(self, target_size=(3840, 1280)):
         """Pre-load and resize all masks"""
@@ -118,18 +88,34 @@ class TMPLMonitor:
         return cache
 
     def get_last_state(self):
-        """Read and return the last state from file"""
-        try:
-            with open(self.filename, 'r') as f:
-                lines = f.readlines()
-                if lines:
-                    return literal_eval(lines[-1].strip())
+        """Read and return the last state from file with file locking"""
+        max_retries = 3
+        retry_delay = 0.1
+
+        for attempt in range(max_retries):
+            try:
+                with open(self.filename, 'r') as f:
+                    import fcntl
+                    fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+
+                    try:
+                        lines = f.readlines()
+                        if lines:
+                            return literal_eval(lines[-1].strip())
+                        return None
+                    finally:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+            except (IOError, OSError) as e:
+                if attempt < max_retries - 1:
+                    print(f"Retry {attempt + 1}/{max_retries}: {e}")
+                    time.sleep(retry_delay)
+                    continue
+                print(f"Error reading file after {max_retries} attempts: {e}")
                 return None
-        except FileNotFoundError:
-            return None
-        except Exception as e:
-            print(f"Error reading file: {e}")
-            return None
+            except Exception as e:
+                print(f"Error parsing file content: {e}")
+                return None
 
     def get_image(self, dir_index, frame_number):
         """Load image on demand with optimized caching"""
@@ -156,130 +142,104 @@ class TMPLMonitor:
         """Combine pre-loaded masks using vectorized operations"""
         target_size = (3840, 1280)
         combined_image = np.full((target_size[1], target_size[0]), 255, dtype=np.uint8)
-        
+
         for gray_value in self.gray_values:
-            mask = self.cached_masks.get(gray_value)
+            if gray_value == 220:
+                mask_path = os.path.join(self.output_dir, f"{self.panorama_id}_{gray_value}.bmp")
+                if os.path.exists(mask_path):
+                    print(f"Loading current mask {gray_value}: {mask_path}")
+                    mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+                    mask = cv2.resize(mask, target_size, interpolation=cv2.INTER_NEAREST)
+            else:
+                mask = self.cached_masks.get(gray_value) # Use cache
+
             color_index = self.gray_indexes.get(gray_value)
             if mask is not None and color_index is not None:
                 binary_mask = (mask > 0)
                 combined_image[binary_mask] = color_index
-
-        # Create preview
-        if self.use_preview:
-            self.create_viridis_preview(combined_image, self.preview_path)
+                print(f"Applied mask {gray_value} -> index {color_index}")
 
         return combined_image
 
-    def create_viridis_preview(self, mask, output_path):
+    def create_viridis_preview(self, mask):
         """
         Create a colored preview using the viridis colormap and save it as BMP.
 
         Args:
             mask (np.ndarray): Grayscale mask with indexed values.
-            output_path (str): Path to save the preview image.
 
         Returns:
             None
         """
-
         normalized_mask = (mask - mask.min()) / (mask.max() - mask.min())
         viridis_colored = plt.cm.viridis(normalized_mask)
         viridis_image = (viridis_colored[:, :, :3] * 255).astype(np.uint8)
-        viridis_bgr = cv2.cvtColor(viridis_image, cv2.COLOR_RGB2BGR)
-
-        # Save the image using OpenCV in BMP format
-        cv2.imwrite(output_path, viridis_bgr)
-        print("Preview saved")
+        return cv2.cvtColor(viridis_image, cv2.COLOR_RGB2BGR)
 
     def process_state(self, state):
         """Process images based on current state"""
         if not state or not any(state):
-           return
+            print("Invalid state - skipping processing")
+            return
 
-        # Collect valid overlays
         load_start = time.time()
         overlays = []
         active_frames = []
 
-        for i, frame_number in enumerate(state):
-           if frame_number > 0:
-               # Try to get from cache first
-               cache_key = f"{i}_{frame_number}"
-               current_time = time.time()
-    
-               if cache_key in self.image_cache:
-                   image, timestamp = self.image_cache[cache_key]
-                   if current_time - timestamp < self.cache_ttl:
-                       print(f"Cache hit: S{i+1}:F{frame_number}")
-                       overlays.append(image)
-                       active_frames.append(f"S{i+1}:F{frame_number}")
-                       continue
-
-               # Load from disk if not in cache or expired
-               print(f"Loading from disk: S{i+1}:F{frame_number}")
-               image = self.get_image(i, frame_number)
-               if image is not None:
-                   self.image_cache[cache_key] = (image, current_time)
-                   overlays.append(image)
-                   active_frames.append(f"S{i+1}:F{frame_number}")
-                   print(f"Cached: S{i+1}:F{frame_number}")
+        print(f"\nProcessing state: {state}")
+        for seq_idx, frame_number in enumerate(state):
+            sequence_name = f"{(seq_idx + 1):02}_0145_220"
+            if frame_number > 0:
+                print(f"* {sequence_name} > loading frame {frame_number}")
+                image = self.get_image(seq_idx, frame_number)
+                if image is not None:
+                    overlays.append(image)
+                    active_frames.append(f"{seq_idx+1}:{frame_number}")
+            else:
+                print(f"* {sequence_name} > skipping")
 
         load_time = time.time() - load_start
 
         if not overlays:
-           print("No valid frames to process. Skipping.")
-           return
+            print("No valid frames to process. Skipping.")
+            return
 
         try:
-            # Merge overlays
             merge_start = time.time()
             result = np.maximum.reduce(overlays)
             merge_time = time.time() - merge_start
 
-            # Save all results in parallel
             save_start = time.time()
-            
-            # Prepare all save operations
             save_tasks = []
-            
+
             # Original result
             output_path = os.path.join(self.output_dir, f"{self.panorama_id}_220.bmp")
-            save_tasks.append((output_path, result))
-            
-            # Resize and crop
-            original_height, original_width = result.shape
-            aspect_ratio = original_width / original_height
-            target_width = 3840
-            target_height = int(target_width / aspect_ratio)
-            resized_image = cv2.resize(result, (target_width, target_height), interpolation=cv2.INTER_NEAREST)
-            crop_top = (resized_image.shape[0] - 1280) // 2
-            cropped_result = resized_image[crop_top:crop_top + 1280, :3840]
-            
+            self.save_file(output_path, result)
+            print(f"Update mask 220: {output_path}")
+
+            self.results_index += 1
+
             # Combined mask
-            self.mask_result_index += 1
             combined_image = self.combine_colored_masks()
-            combined_output_path = os.path.join(self.mask_result_dir, f"{self.mask_result_index}.bmp")
-            save_tasks.append((combined_output_path, combined_image))
-            
-            # Execute all saves in parallel
-            futures = [
-                self.executor.submit(self.save_file, path, img)
-                for path, img in save_tasks
-            ]
-            
-            # Wait for all saves to complete
-            for future in futures:
-                future.result()
-                
+            combined_output_path = os.path.join(self.results_dir, f"{self.results_index}.bmp")
+            self.save_file(combined_output_path, combined_image)
+            print(f"Saving combined mask: {combined_output_path}")
+
+            # Create preview if enabled
+            if self.use_preview:
+                preview_output_path = os.path.join(self.preview_results_dir, f"{self.results_index}.bmp") # :04d
+                preview_image = self.create_viridis_preview(combined_image)
+                self.save_file(preview_output_path, preview_image)
+                print(f"Adding preview to save tasks {preview_output_path}")
+    
             save_time = time.time() - save_start
 
-            # Print performance metrics
-            print(f"\nState: {state}")
-            print(f"Active frames: {', '.join(active_frames)}")
+            print(f"\nActive frames: {', '.join(active_frames)}")
             print(f"Load time: {load_time:.3f}s")
             print(f"Merge time: {merge_time:.3f}s")
             print(f"Save time: {save_time:.3f}s")
             print(f"Total time: {load_time + merge_time + save_time:.3f}s")
+            print(f"Successfully saved all files for index {self.results_index}")
 
         except Exception as e:
             print(f"Error in processing: {e}")
@@ -298,12 +258,21 @@ class TMPLMonitor:
                     current_modified = os.path.getmtime(self.filename)
 
                     if current_modified != self.last_modified:
+                        time.sleep(0.05)
+
                         current_state = self.get_last_state()
-                        
-                        if current_state != self.last_state and current_state is not None:
+
+                        print(f"\nPrevious state: {self.last_state}")
+                        print(f"Current state: {current_state}")
+
+                        if current_state and current_state != self.last_state:
+                            print(f"\nPrevious state: {self.last_state}")
+                            print(f"Current state: {current_state}")
                             self.process_state(current_state)
                             self.last_state = current_state
-                        
+                        else:
+                            print("State unchanged or invalid - skipping")
+
                         self.last_modified = current_modified
 
                     time.sleep(0.01)
