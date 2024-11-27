@@ -117,20 +117,35 @@ class TMPLMonitor:
                 print(f"Error parsing file content: {e}")
                 return None
 
-    def get_missing_indices(self, prev_state, current_state):
-        """Get list of missing indices between states"""
+    def get_missing_states(self, prev_state, current_state):
+        """Generate sequence of intermediate states"""
         if not prev_state or not current_state:
             return []
 
-        missing = []
+        max_steps = 0
         for i in range(len(prev_state)):
             if prev_state[i] != current_state[i]:
-                prev_val = prev_state[i]
-                curr_val = current_state[i]
-                if prev_val < curr_val:
-                    missing.extend(range(prev_val + 1, curr_val))
+                steps = abs(current_state[i] - prev_state[i])
+                max_steps = max(max_steps, steps)
 
-        return missing
+        if max_steps <= 1:
+            return []
+
+        missing_states = []
+        for step in range(1, max_steps):
+            temp_state = list(prev_state)
+            for i in range(len(prev_state)):
+                if prev_state[i] != current_state[i]:
+                    direction = 1 if current_state[i] > prev_state[i] else -1
+                    if prev_state[i] != 0 or current_state[i] != 0:
+                        temp_state[i] = prev_state[i] + (direction * step)
+                        if direction > 0:
+                            temp_state[i] = min(temp_state[i], current_state[i])
+                        else:
+                            temp_state[i] = max(temp_state[i], current_state[i])
+            missing_states.append(temp_state)
+
+        return missing_states
 
     def get_image(self, dir_index, frame_number):
         """Load image on demand with optimized caching"""
@@ -197,17 +212,12 @@ class TMPLMonitor:
             print("Invalid state - skipping processing")
             return
 
-        missing_indices = self.get_missing_indices(self.last_state, state)
-        if missing_indices:
-            print(f"Found missing indices: {missing_indices}")
-            for missing_idx in missing_indices:
-                temp_state = list(self.last_state)
-                for i in range(len(temp_state)):
-                    if self.last_state[i] != state[i]:
-                        temp_state[i] = missing_idx
-                        break
-                print(f"Processing missing state: {temp_state}")
-                self._process_single_state(temp_state)
+        missing_states = self.get_missing_states(self.last_state, state)
+        if missing_states:
+            print(f"Found missing states:")
+            for missing_state in missing_states:
+                print(f"Processing intermediate state: {missing_state}")
+                self._process_single_state(missing_state)
 
         self._process_single_state(state)
         self.last_state = state
