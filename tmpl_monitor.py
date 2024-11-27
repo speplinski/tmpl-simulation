@@ -168,6 +168,20 @@ class TMPLMonitor:
         """Helper method for saving files"""
         cv2.imwrite(str(path), image)
 
+    def read_mask_with_retry(self, mask_path, max_retries=3, delay=0.1):
+        """Read mask file with retry mechanism"""
+        for attempt in range(max_retries):
+            try:
+                if os.path.exists(mask_path):
+                    mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+                    if mask is not None:
+                        return mask
+                time.sleep(delay)
+            except Exception as e:
+                print(f"Attempt {attempt + 1}/{max_retries} failed: {e}")
+                time.sleep(delay)
+        return None
+
     def combine_colored_masks(self):
         """Combine pre-loaded masks using vectorized operations"""
         target_size = (3840, 1280)
@@ -176,18 +190,25 @@ class TMPLMonitor:
         for gray_value in self.gray_values:
             if gray_value == 220:
                 mask_path = os.path.join(self.output_dir, f"{self.panorama_id}_{gray_value}.bmp")
-                if os.path.exists(mask_path):
-                    print(f"Loading current mask {gray_value}: {mask_path}")
-                    mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+                mask = self.read_mask_with_retry(mask_path)
+                if mask is not None:
+                    print(f"Successfully loaded current mask {gray_value}")
                     mask = cv2.resize(mask, target_size, interpolation=cv2.INTER_NEAREST)
+                else:
+                    print(f"Failed to load mask {gray_value} after retries")
+                    continue
             else:
-                mask = self.cached_masks.get(gray_value) # Use cache
+                mask = self.cached_masks.get(gray_value)  # Use cache
 
             color_index = self.gray_indexes.get(gray_value)
             if mask is not None and color_index is not None:
-                binary_mask = (mask > 0)
-                combined_image[binary_mask] = color_index
-                print(f"Applied mask {gray_value} -> index {color_index}")
+                try:
+                    binary_mask = (mask > 0)
+                    combined_image[binary_mask] = color_index
+                    print(f"Applied mask {gray_value} -> index {color_index}")
+                except Exception as e:
+                    print(f"Error applying mask {gray_value}: {e}")
+                    continue
 
         return combined_image
 
