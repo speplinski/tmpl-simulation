@@ -117,6 +117,21 @@ class TMPLMonitor:
                 print(f"Error parsing file content: {e}")
                 return None
 
+    def get_missing_indices(self, prev_state, current_state):
+        """Get list of missing indices between states"""
+        if not prev_state or not current_state:
+            return []
+
+        missing = []
+        for i in range(len(prev_state)):
+            if prev_state[i] != current_state[i]:
+                prev_val = prev_state[i]
+                curr_val = current_state[i]
+                if prev_val < curr_val:
+                    missing.extend(range(prev_val + 1, curr_val))
+
+        return missing
+
     def get_image(self, dir_index, frame_number):
         """Load image on demand with optimized caching"""
         try:
@@ -182,13 +197,30 @@ class TMPLMonitor:
             print("Invalid state - skipping processing")
             return
 
+        missing_indices = self.get_missing_indices(self.last_state, state)
+        if missing_indices:
+            print(f"Found missing indices: {missing_indices}")
+            for missing_idx in missing_indices:
+                temp_state = list(self.last_state)
+                for i in range(len(temp_state)):
+                    if self.last_state[i] != state[i]:
+                        temp_state[i] = missing_idx
+                        break
+                print(f"Processing missing state: {temp_state}")
+                self._process_single_state(temp_state)
+
+        self._process_single_state(state)
+        self.last_state = state
+
+    def _process_single_state(self, state):
+        """Process a single state"""
         load_start = time.time()
         overlays = []
         active_frames = []
 
         print(f"\nProcessing state: {state}")
         for seq_idx, frame_number in enumerate(state):
-            sequence_name = f"{(seq_idx + 1):02}_0145_220"
+            sequence_name = f"{(seq_idx + 1):02}_{self.panorama_id}_220"
             if frame_number > 0:
                 print(f"* {sequence_name} > loading frame {frame_number}")
                 image = self.get_image(seq_idx, frame_number)
@@ -210,13 +242,13 @@ class TMPLMonitor:
             merge_time = time.time() - merge_start
 
             save_start = time.time()
-            save_tasks = []
 
             # Original result
             output_path = os.path.join(self.output_dir, f"{self.panorama_id}_220.bmp")
             self.save_file(output_path, result)
             print(f"Update mask 220: {output_path}")
 
+            # Increment index
             self.results_index += 1
 
             # Combined mask
@@ -231,7 +263,7 @@ class TMPLMonitor:
                 preview_image = self.create_viridis_preview(combined_image)
                 self.save_file(preview_output_path, preview_image)
                 print(f"Adding preview to save tasks {preview_output_path}")
-    
+
             save_time = time.time() - save_start
 
             print(f"\nActive frames: {', '.join(active_frames)}")
