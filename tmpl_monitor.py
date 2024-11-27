@@ -241,40 +241,49 @@ class TMPLMonitor:
             result = np.maximum.reduce(overlays)
             merge_time = time.time() - merge_start
 
-            save_start = time.time()
-
-            # Original result
             output_path = os.path.join(self.output_dir, f"{self.panorama_id}_220.bmp")
             self.save_file(output_path, result)
             print(f"Update mask 220: {output_path}")
 
-            # Increment index
-            self.results_index += 1
-
             # Combined mask
             combined_image = self.combine_colored_masks()
-            combined_output_path = os.path.join(self.results_dir, f"{self.results_index}.bmp")
-            self.save_file(combined_output_path, combined_image)
-            print(f"Saving combined mask: {combined_output_path}")
+        
+            # Only increment index after we know we have valid data
+            next_index = self.results_index + 1
+        
+            # Try to save all files - if any fails, don't increment the index
+            try:
+                # Save combined mask
+                combined_output_path = os.path.join(self.results_dir, f"{next_index}.bmp")
+                self.save_file(combined_output_path, combined_image)
+                print(f"Saving combined mask: {combined_output_path}")
 
-            # Create preview if enabled
-            if self.use_preview:
-                preview_output_path = os.path.join(self.preview_results_dir, f"{self.results_index}.bmp") # :04d
-                preview_image = self.create_viridis_preview(combined_image)
-                self.save_file(preview_output_path, preview_image)
-                print(f"Adding preview to save tasks {preview_output_path}")
+                # Create and save preview if enabled
+                if self.use_preview:
+                    preview_output_path = os.path.join(self.preview_results_dir, f"{next_index}.bmp")
+                    preview_image = self.create_viridis_preview(combined_image)
+                    self.save_file(preview_output_path, preview_image)
+                    print(f"Adding preview: {preview_output_path}")
 
-            save_time = time.time() - save_start
+                # Only increment index if all saves were successful
+                self.results_index = next_index
+            
+                save_time = time.time() - merge_time
 
-            print(f"\nActive frames: {', '.join(active_frames)}")
-            print(f"Load time: {load_time:.3f}s")
-            print(f"Merge time: {merge_time:.3f}s")
-            print(f"Save time: {save_time:.3f}s")
-            print(f"Total time: {load_time + merge_time + save_time:.3f}s")
-            print(f"Successfully saved all files for index {self.results_index}")
+                print(f"\nActive frames: {', '.join(active_frames)}")
+                print(f"Load time: {load_time:.3f}s")
+                print(f"Merge time: {merge_time:.3f}s")
+                print(f"Save time: {save_time:.3f}s")
+                print(f"Total time: {load_time + merge_time + save_time:.3f}s")
+                print(f"Successfully saved all files for index {self.results_index}")
+
+            except Exception as e:
+                print(f"Error saving results for index {next_index}: {e}")
+                raise  # Re-raise the exception to be caught by outer try-except
 
         except Exception as e:
             print(f"Error in processing: {e}")
+            print("Skipping this state due to error")
 
     def run(self):
         try:
