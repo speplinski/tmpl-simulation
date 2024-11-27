@@ -251,6 +251,8 @@ class TMPLMonitor:
             result = np.maximum.reduce(overlays)
             merge_time = time.time() - merge_start
 
+            save_start = time.time()
+            
             output_path = os.path.join(self.output_dir, f"{self.panorama_id}_220.bmp")
             self.save_file(output_path, result)
             print(f"Update mask 220: {output_path}")
@@ -278,7 +280,7 @@ class TMPLMonitor:
                 # Only increment index if all saves were successful
                 self.results_index = next_index
             
-                save_time = time.time() - merge_time
+                save_time = time.time() - save_start
 
                 print(f"\nActive frames: {', '.join(active_frames)}")
                 print(f"Load time: {load_time:.3f}s")
