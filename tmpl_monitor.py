@@ -3,326 +3,222 @@
 import os
 import time
 from ast import literal_eval
-import sys
 import cv2
 import numpy as np
-import matplotlib.pyplot as plt
-from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+import mmap
+import psutil
+from datetime import datetime
+
+def get_memory_usage():
+    """Returns memory usage in MB"""
+    process = psutil.Process(os.getpid())
+    memory_info = process.memory_info().rss
+    return memory_info / 1024 / 1024
+
+def print_memory_status():
+    """Prints current memory status"""
+    memory_mb = get_memory_usage()
+    total_memory = psutil.virtual_memory().total / 1024 / 1024
+    print(f"Memory usage: {memory_mb:.1f} MB")
+    print(f"Total system memory: {total_memory:.1f} MB")
+    print(f"Memory usage percentage: {(memory_mb/total_memory)*100:.1f}%")
 
 class TMPLMonitor:
     def __init__(self, panorama_id, gray_values, gray_indexes):
-        # Monitor settings
         self.filename = 'tmpl.log'
         self.last_modified = 0
         self.last_state = None
-        self.use_preview = False
-
-        # Image processing settings
+        
+        # Basic configuration
         self.panorama_id = panorama_id
         self.gray_values = gray_values
         self.gray_indexes = gray_indexes
-        self.base_dir = f'./landscapes/{panorama_id}/sequences'
-        self.directories = [os.path.join(self.base_dir, f"{i:02}_{panorama_id}_220") for i in range(1, 6)]
-        self.output_dir = f'./landscapes/{panorama_id}'
-        self.results_dir = './results'
-        self.preview_results_dir = './preview_results'
+        
+        # Paths
+        self.base_dir = Path(f'./landscapes/{panorama_id}/sequences')
+        self.output_dir = Path(f'./landscapes/{panorama_id}')
+        self.results_dir = Path('./results')
+        self.results_dir.mkdir(exist_ok=True)
+        
+        # Memory caches
+        self.mask_cache = {}
+        self.sequence_frames = {}
+        self.current_mask_220 = None
         self.results_index = 0
+        
+        # Initialize system
+        self._initialize_system()
 
-        # Initialize caches
-        self.image_cache = {}
-        self.cache_ttl = 300
-        self.executor = ThreadPoolExecutor(max_workers=5)
-
-        # Verify directories
-        print("\nChecking directories:")
-        for dir in self.directories:
-            print(f"{dir}: {'exists' if os.path.exists(dir) else 'MISSING'}")
-
-        os.makedirs(self.results_dir, exist_ok=True)
-        os.makedirs(self.preview_results_dir, exist_ok=True)
-
-        # Initialize path cache
-        print("\nInitializing BMP path cache...")
-        self.path_cache = self.initialize_cache()
-        print("Cache initialized")
-
-        # Pre-load and resize masks
-        print("\nPre-loading and resizing masks...")
-        self.cached_masks = self.preload_masks()
-        print("Masks loaded")
-
-        print(f"Starting from index: {self.results_index}")
-
-    def preload_masks(self, target_size=(3840, 1280)):
-        """Pre-load and resize all masks"""
-        masks = {}
+    def _load_and_resize_image(self, image_path):
+        """Load and resize image correctly"""
+        image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+        if image is not None:
+            # Najpierw skalujemy do szerokości 3840
+            current_h, current_w = image.shape
+            scale = 3840 / current_w
+            new_h = int(current_h * scale)
+            resized = cv2.resize(image, (3840, new_h))
+            
+            # Teraz wycinamy środkowy fragment 1280px
+            if new_h > 1280:
+                start = (new_h - 1280) // 2
+                resized = resized[start:start+1280, :]
+            
+            return resized
+        return None
+        
+    def _initialize_system(self):
+        """Initialize system with memory monitoring"""
+        print("Initializing system...")
+        print("\nInitial memory status:")
+        print_memory_status()
+        
+        # Load and resize static masks
+        print("\nLoading static masks...")
         for gray_value in self.gray_values:
-            mask_path = os.path.join(self.output_dir, f"{self.panorama_id}_{gray_value}.bmp")
-            if os.path.exists(mask_path):
-                mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
-                mask = cv2.resize(mask, target_size, interpolation=cv2.INTER_NEAREST)
-                masks[gray_value] = mask
-        return masks
-
-    def initialize_cache(self):
-        """Cache file paths and their existence"""
-        from pathlib import Path
-        cache = [{} for _ in range(5)]
-        total_files = 0
-
-        for i, directory in enumerate(self.directories):
-            dir_files = 0
-            directory_path = Path(directory)
-            if directory_path.exists():
-                for filepath in directory_path.glob('*.bmp'):
+            if gray_value != 220:
+                mask_path = self.output_dir / f"{self.panorama_id}_{gray_value}.bmp"
+                if mask_path.exists():
+                    mask = self._load_and_resize_image(mask_path)
+                    if mask is not None:
+                        self.mask_cache[gray_value] = mask
+                        print(f"Loaded and resized mask {gray_value}")
+        
+        print("\nMemory status after loading masks:")
+        print_memory_status()
+        
+        # Load and resize sequence frames
+        print("\nLoading sequence frames...")
+        total_frames = 0
+        for seq_num in range(1, 6):
+            seq_dir = self.base_dir / f"{seq_num:02}_{self.panorama_id}_220"
+            if seq_dir.exists():
+                self.sequence_frames[seq_num] = {}
+                seq_frames = 0
+                for frame_path in seq_dir.glob('*.bmp'):
                     try:
-                        frame_num = int(filepath.stem.split('_')[-1])
-                        cache[i][frame_num] = (str(filepath), True)
-                        dir_files += 1
-                    except ValueError as e:
-                        print(f"Error parsing filename {filepath.name}: {e}")
-                total_files += dir_files
-                print(f"Sequence {i+1}: {dir_files} BMP files indexed")
-
-        print(f"Total files indexed: {total_files}")
-        return cache
+                        frame_num = int(frame_path.stem.split('_')[-1])
+                        frame = self._load_and_resize_image(frame_path)
+                        if frame is not None:
+                            self.sequence_frames[seq_num][frame_num] = frame
+                            seq_frames += 1
+                    except ValueError:
+                        continue
+                total_frames += seq_frames
+                print(f"Sequence {seq_num}: {seq_frames} frames loaded and resized")
+                print_memory_status()
+        
+        print(f"\nTotal frames loaded: {total_frames}")
+        print("\nFinal memory status:")
+        print_memory_status()
 
     def get_last_state(self):
-        """Read and return the last state from file with file locking"""
-        max_retries = 3
-        retry_delay = 0.1
-
-        for attempt in range(max_retries):
-            try:
-                with open(self.filename, 'r') as f:
-                    import fcntl
-                    fcntl.flock(f.fileno(), fcntl.LOCK_SH)
-
-                    try:
-                        lines = f.readlines()
-                        if lines:
-                            return literal_eval(lines[-1].strip())
-                        return None
-                    finally:
-                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-
-            except (IOError, OSError) as e:
-                if attempt < max_retries - 1:
-                    print(f"Retry {attempt + 1}/{max_retries}: {e}")
-                    time.sleep(retry_delay)
-                    continue
-                print(f"Error reading file after {max_retries} attempts: {e}")
-                return None
-            except Exception as e:
-                print(f"Error parsing file content: {e}")
-                return None
-
-    def get_missing_states(self, prev_state, current_state):
-        """Generate sequence of intermediate states"""
-        if not prev_state or not current_state:
-            return []
-
-        max_steps = 0
-        for i in range(len(prev_state)):
-            if prev_state[i] != current_state[i]:
-                steps = abs(current_state[i] - prev_state[i])
-                max_steps = max(max_steps, steps)
-
-        if max_steps <= 1:
-            return []
-
-        missing_states = []
-        for step in range(1, max_steps):
-            temp_state = list(prev_state)
-            for i in range(len(prev_state)):
-                if prev_state[i] != current_state[i]:
-                    direction = 1 if current_state[i] > prev_state[i] else -1
-                    if prev_state[i] != 0 or current_state[i] != 0:
-                        temp_state[i] = prev_state[i] + (direction * step)
-                        if direction > 0:
-                            temp_state[i] = min(temp_state[i], current_state[i])
-                        else:
-                            temp_state[i] = max(temp_state[i], current_state[i])
-            missing_states.append(temp_state)
-
-        return missing_states
-
-    def get_image(self, dir_index, frame_number):
-        """Load image on demand with optimized caching"""
+        """Read last state from file using mmap"""
         try:
-            filepath_info = self.path_cache[dir_index].get(frame_number)
-            if filepath_info:
-                filepath, exists = filepath_info
-                if exists:
-                    image = cv2.imread(filepath, cv2.IMREAD_GRAYSCALE)
-                    return image
-                else:
-                    print(f"File marked as non-existent: {filepath}")
-            else:
-                print(f"No path for frame {frame_number} in sequence {dir_index+1}")
-        except Exception as e:
-            print(f"Error loading frame {frame_number} from sequence {dir_index+1}: {e}")
-        return None
+            with open(self.filename, 'rb') as f:
+                with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+                    last_line = mm.readline()
+                    while True:
+                        next_line = mm.readline()
+                        if not next_line:
+                            break
+                        last_line = next_line
+                    return literal_eval(last_line.decode().strip())
+        except Exception:
+            return None
 
-    def save_file(self, path, image):
-        """Helper method for saving files"""
-        cv2.imwrite(str(path), image)
-
-    def read_mask_with_retry(self, mask_path, max_retries=3, delay=0.1):
-        """Read mask file with retry mechanism"""
-        for attempt in range(max_retries):
-            try:
-                if os.path.exists(mask_path):
-                    mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
-                    if mask is not None:
-                        return mask
-                time.sleep(delay)
-            except Exception as e:
-                print(f"Attempt {attempt + 1}/{max_retries} failed: {e}")
-                time.sleep(delay)
-        return None
+    def update_mask_220(self, state):
+        """Update mask 220 in memory"""
+        active_frames = []
+        
+        for seq_idx, frame_number in enumerate(state, 1):
+            if frame_number > 0:
+                frame = self.sequence_frames.get(seq_idx, {}).get(frame_number)
+                if frame is not None:
+                    active_frames.append(frame)
+        
+        if not active_frames:
+            self.current_mask_220 = None
+            return False
+            
+        self.current_mask_220 = np.maximum.reduce(active_frames)
+        return True
 
     def combine_colored_masks(self):
-        """Combine pre-loaded masks using vectorized operations"""
+        """Combine all masks with correct size"""
         target_size = (3840, 1280)
         combined_image = np.full((target_size[1], target_size[0]), 255, dtype=np.uint8)
-
-        for gray_value in self.gray_values:
-            if gray_value == 220:
-                mask_path = os.path.join(self.output_dir, f"{self.panorama_id}_{gray_value}.bmp")
-                mask = self.read_mask_with_retry(mask_path)
-                if mask is not None:
-                    print(f"Successfully loaded current mask {gray_value}")
-                    mask = cv2.resize(mask, target_size, interpolation=cv2.INTER_NEAREST)
-                else:
-                    print(f"Failed to load mask {gray_value} after retries")
-                    continue
-            else:
-                mask = self.cached_masks.get(gray_value)  # Use cache
-
-            color_index = self.gray_indexes.get(gray_value)
-            if mask is not None and color_index is not None:
-                try:
-                    binary_mask = (mask > 0)
-                    combined_image[binary_mask] = color_index
-                    print(f"Applied mask {gray_value} -> index {color_index}")
-                except Exception as e:
-                    print(f"Error applying mask {gray_value}: {e}")
-                    continue
-
+        
+        for gray_value, mask in self.mask_cache.items():
+            if gray_value in self.gray_indexes:
+                combined_image[mask > 0] = self.gray_indexes[gray_value]
+        
+        if self.current_mask_220 is not None and 220 in self.gray_indexes:
+            combined_image[self.current_mask_220 > 0] = self.gray_indexes[220]
+        
         return combined_image
 
-    def create_viridis_preview(self, mask):
-        """
-        Create a colored preview using the viridis colormap and save it as BMP.
-
-        Args:
-            mask (np.ndarray): Grayscale mask with indexed values.
-
-        Returns:
-            None
-        """
-        normalized_mask = (mask - mask.min()) / (mask.max() - mask.min())
-        viridis_colored = plt.cm.viridis(normalized_mask)
-        viridis_image = (viridis_colored[:, :, :3] * 255).astype(np.uint8)
-        return cv2.cvtColor(viridis_image, cv2.COLOR_RGB2BGR)
-
     def process_state(self, state):
-        """Process images based on current state"""
+        """Process state - all operations in memory"""
         if not state or not any(state):
-            print("Invalid state - skipping processing")
             return
 
-        missing_states = self.get_missing_states(self.last_state, state)
-        if missing_states:
-            print(f"Found missing states:")
-            for missing_state in missing_states:
-                print(f"Processing intermediate state: {missing_state}")
-                self._process_single_state(missing_state)
-
-        self._process_single_state(state)
-        self.last_state = state
-
-    def _process_single_state(self, state):
-        """Process a single state"""
-        load_start = time.time()
-        overlays = []
-        active_frames = []
-
-        print(f"\nProcessing state: {state}")
-        for seq_idx, frame_number in enumerate(state):
-            sequence_name = f"{(seq_idx + 1):02}_{self.panorama_id}_220"
-            if frame_number > 0:
-                print(f"* {sequence_name} > loading frame {frame_number}")
-                image = self.get_image(seq_idx, frame_number)
-                if image is not None:
-                    overlays.append(image)
-                    active_frames.append(f"{seq_idx+1}:{frame_number}")
-            else:
-                print(f"* {sequence_name} > skipping")
-
-        load_time = time.time() - load_start
-
-        if not overlays:
-            print("No valid frames to process. Skipping.")
-            return
+        process_start = time.time()
+        current_time = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        print(f"\nStarting processing at: {current_time}")
+        print("Memory before processing:")
+        print_memory_status()
 
         try:
-            merge_start = time.time()
-            result = np.maximum.reduce(overlays)
-            merge_time = time.time() - merge_start
-
+            # Update mask 220 in memory
+            mask_220_start = time.time()
+            print("Updating mask 220 in memory...")
+            if not self.update_mask_220(state):
+                print("No valid frames to process")
+                return
+            mask_220_time = time.time() - mask_220_start
+            print(f"Mask 220 update time: {mask_220_time:.3f}s")
+            
+            # Create combined mask
+            combine_start = time.time()
+            print("Combining masks...")
+            combined_mask = self.combine_colored_masks()
+            combine_time = time.time() - combine_start
+            print(f"Masks combination time: {combine_time:.3f}s")
+            
+            # Save result
             save_start = time.time()
-            
-            output_path = os.path.join(self.output_dir, f"{self.panorama_id}_220.bmp")
-            self.save_file(output_path, result)
-            print(f"Update mask 220: {output_path}")
-
-            # Combined mask
-            combined_image = self.combine_colored_masks()
-        
-            # Only increment index after we know we have valid data
             next_index = self.results_index + 1
-        
-            # Try to save all files - if any fails, don't increment the index
-            try:
-                # Save combined mask
-                combined_output_path = os.path.join(self.results_dir, f"{next_index}.bmp")
-                self.save_file(combined_output_path, combined_image)
-                print(f"Saving combined mask: {combined_output_path}")
-
-                # Create and save preview if enabled
-                if self.use_preview:
-                    preview_output_path = os.path.join(self.preview_results_dir, f"{next_index}.bmp")
-                    preview_image = self.create_viridis_preview(combined_image)
-                    self.save_file(preview_output_path, preview_image)
-                    print(f"Adding preview: {preview_output_path}")
-
-                # Only increment index if all saves were successful
-                self.results_index = next_index
+            result_path = self.results_dir / f"{next_index}.bmp"
+            cv2.imwrite(str(result_path), combined_mask)
+            save_time = time.time() - save_start
             
-                save_time = time.time() - save_start
-
-                print(f"\nActive frames: {', '.join(active_frames)}")
-                print(f"Load time: {load_time:.3f}s")
-                print(f"Merge time: {merge_time:.3f}s")
-                print(f"Save time: {save_time:.3f}s")
-                print(f"Total time: {load_time + merge_time + save_time:.3f}s")
-                print(f"Successfully saved all files for index {self.results_index}")
-
-            except Exception as e:
-                print(f"Error saving results for index {next_index}: {e}")
-                raise  # Re-raise the exception to be caught by outer try-except
-
+            total_time = time.time() - process_start
+            current_time = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            
+            self.results_index = next_index
+            
+            print(f"\nProcessing completed at: {current_time}")
+            print(f"Result saved as: {result_path}")
+            print(f"\nTiming breakdown:")
+            print(f"- Mask 220 update: {mask_220_time:.3f}s")
+            print(f"- Masks combination: {combine_time:.3f}s")
+            print(f"- Save result: {save_time:.3f}s")
+            print(f"Total processing time: {total_time:.3f}s")
+            
+            print("\nMemory after processing:")
+            print_memory_status()
+            
         except Exception as e:
             print(f"Error in processing: {e}")
-            print("Skipping this state due to error")
 
     def run(self):
+        """Main program loop"""
+        print("\nTMPL Monitor Started")
+        print("Waiting for updates...")
+        
         try:
-            print("\nTMPL Monitor Started")
-            print("Waiting for updates...")
-
             while True:
                 try:
                     if not os.path.exists(self.filename):
@@ -330,23 +226,12 @@ class TMPLMonitor:
                         continue
 
                     current_modified = os.path.getmtime(self.filename)
-
                     if current_modified != self.last_modified:
-                        time.sleep(0.05)
-
                         current_state = self.get_last_state()
-
-                        print(f"\nPrevious state: {self.last_state}")
-                        print(f"Current state: {current_state}")
-
                         if current_state and current_state != self.last_state:
-                            print(f"\nPrevious state: {self.last_state}")
-                            print(f"Current state: {current_state}")
+                            print(f"\nProcessing state: {current_state}")
                             self.process_state(current_state)
                             self.last_state = current_state
-                        else:
-                            print("State unchanged or invalid - skipping")
-
                         self.last_modified = current_modified
 
                     time.sleep(0.01)
@@ -357,21 +242,20 @@ class TMPLMonitor:
                 except Exception as e:
                     print(f"Error: {e}")
                     time.sleep(0.1)
-        finally:
-            self.executor.shutdown()
+                    
+        except KeyboardInterrupt:
+            print("\nShutting down...")
 
 if __name__ == "__main__":
     panorama_id = "0145"
     gray_values = [250, 245, 220, 200, 195, 55, 38, 35]
     gray_indexes = {
-        35: 1,
-        38: 2,
-        55: 4,
-        195: 9,
-        200: 10,
-        220: 11,
-        245: 12,
-        250: 13
+        35: 1, 38: 2, 55: 4, 195: 9,
+        200: 10, 220: 11, 245: 12, 250: 13
     }
+    
+    print("\nStarting memory status:")
+    print_memory_status()
+    
     monitor = TMPLMonitor(panorama_id, gray_values, gray_indexes)
     monitor.run()
